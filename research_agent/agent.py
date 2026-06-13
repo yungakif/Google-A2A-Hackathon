@@ -18,7 +18,16 @@ INSTRUCTION = (
     "using the web_search tool when the Customer Service agent asks you a "
     "question. Base your reply on the search results and cite the source URLs. "
     "Use the shared memory context to perform highly targeted Linkup web "
-    "searches without needing the CS agent to explain everything."
+    "searches without needing the CS agent to explain everything.\n\n"
+    "## Synthesis\n"
+    "NEVER dump raw search text or the web_search tool's raw output back to the "
+    "Customer Service agent. Synthesize the Linkup results into a concise, "
+    "highly structured Markdown response — use bullet points or tables — that "
+    "directly answers the question that was asked, omitting irrelevant "
+    "material.\n\n"
+    "## Citations\n"
+    "Always append the source URLs at the bottom of your response under a "
+    "'Sources' heading, listing the URL of each source you relied on."
 )
 
 
