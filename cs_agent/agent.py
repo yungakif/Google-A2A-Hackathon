@@ -7,6 +7,7 @@ from google.adk.agents import LlmAgent
 
 from env_toolset import EnvApiToolset
 from rag_tools import kb_search_bm25, kb_search_vector
+from research_client_tool import ask_research_agent
 
 MODEL = os.environ.get("MODEL", "gemini-3.5-flash")
 POLICY_PATH = Path(os.environ.get("KB_POLICY_PATH", "/app/kb/policy.md"))
@@ -26,9 +27,20 @@ comes up empty, rephrase and try again before telling the customer you can't
 find the information.
 """
 
+RESEARCH_GUIDANCE = """
+
+## Research Agent
+
+The knowledge base only covers Rho-Bank policy. When you need general
+information from the public internet that is not in the knowledge base, use
+ask_research_agent(message) to delegate the lookup to the research agent and
+relay its findings. Prefer the knowledge base for bank policy; use the
+research agent for general internet research.
+"""
+
 root_agent = LlmAgent(
     name="cs_agent",
     model=MODEL,
-    instruction=POLICY_PATH.read_text() + RAG_GUIDANCE,
-    tools=[EnvApiToolset(), kb_search_bm25, kb_search_vector],
+    instruction=POLICY_PATH.read_text() + RAG_GUIDANCE + RESEARCH_GUIDANCE,
+    tools=[EnvApiToolset(), kb_search_bm25, kb_search_vector, ask_research_agent],
 )
