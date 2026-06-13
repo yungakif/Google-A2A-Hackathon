@@ -6,6 +6,7 @@ from google.adk.agents import LlmAgent
 
 from cs_client_tool import ask_customer_service
 from env_toolset import EnvApiToolset
+from shared_memory import inject_shared_memory, update_shared_memory
 
 MODEL = os.environ.get("MODEL", "gemini-3.5-flash")
 
@@ -28,11 +29,16 @@ You are the user's personal banking assistant for their Rho-Bank accounts.
   Never fill in placeholders (e.g. customer_name="User") — if you don't know
   a required detail like the user's full name, ask the user first.
 - Be concise, accurate, and never invent account details or policies.
+
+Whenever you learn a new fact about the user (e.g., name, intent, income), use
+the update_shared_memory tool to store it so other agents can see it. The
+current shared memory is shown to you under "Shared Memory (session context)".
 """
 
 root_agent = LlmAgent(
     name="personal_agent",
     model=MODEL,
     instruction=INSTRUCTION,
-    tools=[EnvApiToolset(), ask_customer_service],
+    tools=[EnvApiToolset(), ask_customer_service, update_shared_memory],
+    before_model_callback=inject_shared_memory,
 )

@@ -6,6 +6,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY cs_agent/ .
 COPY kb/ ./kb/
+COPY shared_memory.py .
 
 EXPOSE 9002
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "9002"]
