@@ -1,9 +1,8 @@
 """Knowledge-base search tools backed by Redis (RediSearch).
 
-kb_search: one hybrid tool — runs BM25 (OR-semantics keyword) and HNSW vector
-search over gemini-embedding-001 chunk embeddings, then fuses them with
-Reciprocal Rank Fusion. Vector search is skipped gracefully if the index has no
-embeddings (BM25-only).
+kb_search_bm25: full-text BM25 search (OR-semantics keyword query).
+kb_search_vector: HNSW vector search over gemini-embedding-001 embeddings
+(available only when the index was built with embeddings).
 
 Replies are parsed via execute_command so both the classic array reply and
 the Redis 8 map-style reply work regardless of redis-py version."""
@@ -14,25 +13,35 @@ import struct
 
 import redis
 
-from fusion import reciprocal_rank_fusion
-
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 KB_INDEX = "kb_idx"
 DOC_PREFIX = "doc:"
 EMBEDDING_MODEL = "gemini-embedding-001"
-EMBEDDING_DIM = 768
+EMBEDDING_DIM = 3072
 
 _client = redis.Redis.from_url(REDIS_URL, decode_responses=False)
 _genai_client = None
 
 
 def _get_genai_client():
-    """Reused genai client (one connection pool, not a new one per search)."""
+    """Reused genai client (one connection pool, not a new one per search).
+
+    Configured to retry Vertex rate-limit / transient errors with exponential
+    backoff so embedding calls survive higher eval concurrency on one API key
+    instead of failing the search outright."""
     global _genai_client
     if _genai_client is None:
         from google import genai
+        from google.genai import types
 
-        _genai_client = genai.Client()
+        _genai_client = genai.Client(
+            http_options=types.HttpOptions(
+                retry_options=types.HttpRetryOptions(
+                    attempts=4, initial_delay=1.0, max_delay=20.0, exp_base=2.0,
+                    jitter=0.5, http_status_codes=[429, 500, 503],
+                )
+            )
+        )
     return _genai_client
 
 
@@ -80,7 +89,17 @@ def _strip_score(docs: list[dict]) -> list[dict]:
     return docs
 
 
-def _search_bm25(query: str, top_k: int) -> list[dict]:
+def kb_search_bm25(query: str, top_k: int = 5) -> list[dict]:
+    """Full-text (BM25) search over the Rho-Bank knowledge base.
+
+    Args:
+        query: Keywords or a short phrase to search for. Matching is ranked,
+            so extra keywords help rather than hurt.
+        top_k: Number of documents to return.
+
+    Returns:
+        Matching documents with doc_id, title, and full content.
+    """
     terms = re.findall(r"\w+", query.lower())
     if not terms:
         return []
@@ -89,66 +108,96 @@ def _search_bm25(query: str, top_k: int) -> list[dict]:
     reply = _client.execute_command(
         "FT.SEARCH", KB_INDEX, or_query,
         "LIMIT", "0", str(top_k),
-        "RETURN", "3", "title", "section", "content",
+        "RETURN", "2", "title", "content",
     )
     return _parse_search_reply(reply)
 
 
-def _search_vector(query: str, top_k: int) -> list[dict]:
-    vector = struct.pack(f"{EMBEDDING_DIM}f", *_embed([query])[0])
-    reply = _client.execute_command(
-        "FT.SEARCH", KB_INDEX, f"*=>[KNN {top_k} @embedding $vec AS score]",
-        "PARAMS", "2", "vec", vector,
-        "SORTBY", "score",
-        "LIMIT", "0", str(top_k),
-        "RETURN", "4", "title", "section", "content", "score",
-        "DIALECT", "2",
-    )
-    return _strip_score(_parse_search_reply(reply))
+def kb_search_vector(query: str, top_k: int = 5) -> list[dict]:
+    """Semantic (vector) search over the Rho-Bank knowledge base.
 
-
-def _parent_doc_id(key: str) -> str:
-    base = key[len(DOC_PREFIX):] if key.startswith(DOC_PREFIX) else key
-    return base.split("#")[0]
-
-
-def kb_search(query: str, top_k: int = 5) -> list[dict]:
-    """Search the Rho-Bank knowledge base and return the most relevant sections.
-
-    Runs keyword (BM25) and semantic (vector) search together and fuses the
-    results, so you get the best of both with one call. Use this for any policy
-    question, procedure, eligibility rule, or scenario guidance.
+    Better than kb_search_bm25 when the query is a natural-language question
+    rather than exact keywords.
 
     Args:
-        query: A natural-language question or keywords. Extra context helps.
-        top_k: Number of sections to return.
+        query: A natural-language question or description.
+        top_k: Number of documents to return.
 
     Returns:
-        Matching sections, each with doc_id, title, section (heading), and content.
+        Matching documents with doc_id, title, and full content; or an error
+        entry telling you to fall back to kb_search_bm25.
     """
-    pool = max(top_k * 2, 10)
-    bm25 = _search_bm25(query, pool)
     try:
-        vector = _search_vector(query, pool)
-    except Exception:
-        vector = []
+        vector = struct.pack(f"{EMBEDDING_DIM}f", *_embed([query])[0])
+        reply = _client.execute_command(
+            "FT.SEARCH", KB_INDEX, f"*=>[KNN {top_k} @embedding $vec AS score]",
+            "PARAMS", "2", "vec", vector,
+            "SORTBY", "score",
+            "LIMIT", "0", str(top_k),
+            "RETURN", "3", "title", "content", "score",
+            "DIALECT", "2",
+        )
+        return _strip_score(_parse_search_reply(reply))
+    except Exception as e:
+        return [
+            {
+                "error": f"Vector search unavailable ({type(e).__name__}). "
+                "Use kb_search_bm25 with keywords instead."
+            }
+        ]
 
-    field_map: dict[str, dict] = {}
-    for d in bm25 + vector:
-        field_map.setdefault(d["doc_id"], d)
 
-    rankings = [[d["doc_id"] for d in bm25]]
-    if vector:
-        rankings.append([d["doc_id"] for d in vector])
-    fused = reciprocal_rank_fusion(rankings, top_k=top_k)
+def _rrf_fuse(rankings: list[list[str]], k: int = 60) -> dict[str, float]:
+    """Reciprocal Rank Fusion: merge several ranked id-lists into one score map.
 
-    results = []
-    for key in fused:
-        d = field_map.get(key, {})
-        results.append({
-            "doc_id": _parent_doc_id(key),
-            "title": d.get("title", ""),
-            "section": d.get("section", ""),
-            "content": d.get("content", ""),
-        })
-    return results
+    RRF is scale-free, so it combines BM25 and cosine rankings without needing
+    their (incomparable) raw scores. Lower rank => higher contribution.
+    """
+    scores: dict[str, float] = {}
+    for ranking in rankings:
+        for rank, doc_id in enumerate(ranking):
+            scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + rank + 1)
+    return scores
+
+
+def kb_search(query: str, top_k: int = 8) -> list[dict]:
+    """Hybrid search over the Rho-Bank knowledge base. PREFER THIS tool.
+
+    Runs keyword (BM25) and semantic (vector) search together and fuses them
+    with Reciprocal Rank Fusion, so it is robust whether the query is exact
+    keywords (e.g. an internal tool name) or a natural-language question. Each
+    method catches what the other misses; fusion surfaces docs ranked well by
+    either. Degrades to keyword-only if embeddings are unavailable.
+
+    Args:
+        query: Keywords or a natural-language question/description.
+        top_k: Number of documents to return.
+
+    Returns:
+        Best-matching documents (doc_id, title, full content), best first.
+    """
+    over = max(top_k * 2, 10)
+    bm = kb_search_bm25(query, top_k=over)
+    vec = kb_search_vector(query, top_k=over)
+    if vec and isinstance(vec[0], dict) and "error" in vec[0]:
+        vec = []  # embeddings unavailable -> BM25 ranking only
+
+    docs: dict[str, dict] = {}
+    bm_ids: list[str] = []
+    vec_ids: list[str] = []
+    for d in bm:
+        did = d.get("doc_id")
+        if did:
+            docs.setdefault(did, d)
+            bm_ids.append(did)
+    for d in vec:
+        did = d.get("doc_id")
+        if did:
+            docs.setdefault(did, d)
+            vec_ids.append(did)
+
+    if not docs:
+        return []
+    fused = _rrf_fuse([bm_ids, vec_ids])
+    ranked = sorted(fused, key=lambda did: -fused[did])[:top_k]
+    return [docs[did] for did in ranked]

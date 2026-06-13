@@ -1,10 +1,14 @@
+# Isolated eval stack on ALT ports (9011/9012) so it never collides with a
+# teammate's stack on 9001/9002/9003. redis is not published to the host.
+# Excludes research-agent (banking tasks don't need it); RESEARCH_AGENT_URL is
+# set empty so research_client_tool imports without a KeyError.
 services:
   personal-agent:
     build:
       context: .
       dockerfile: personal_agent/Dockerfile
     ports:
-      - "9001:9001"
+      - "9011:9001"
     depends_on:
       - redis
     environment:
@@ -23,39 +27,19 @@ services:
       context: .
       dockerfile: cs_agent/Dockerfile
     ports:
-      - "9002:9002"
+      - "9012:9002"
     depends_on:
       - redis
     environment:
       ENV_API_URL: ${ENV_API_URL:-http://host.docker.internal:8090}
       ENV_API_TOKEN: ${CS_ENV_API_TOKEN:-dev-agent-token}
       REDIS_URL: redis://redis:6379/0
-      RESEARCH_AGENT_URL: ${RESEARCH_AGENT_URL:-http://research-agent:9003}
       MODEL: ${MODEL:-gemini-3.5-flash}
       GOOGLE_GENAI_USE_VERTEXAI: ${GOOGLE_GENAI_USE_VERTEXAI:-true}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-
-  research-agent:
-    build:
-      context: .
-      dockerfile: research_agent/Dockerfile
-    ports:
-      - "9003:9003"
-    depends_on:
-      - redis
-    environment:
-      REDIS_URL: redis://redis:6379/0
-      MODEL: ${MODEL:-gemini-3.5-flash}
-      GOOGLE_GENAI_USE_VERTEXAI: ${GOOGLE_GENAI_USE_VERTEXAI:-true}
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
-      LINKUP_API_KEY: ${LINKUP_API_KEY:-}
-      LINKUP_DEPTH: ${LINKUP_DEPTH:-standard}
+      RESEARCH_AGENT_URL: ${RESEARCH_AGENT_URL:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
   redis:
     image: redis:8
-    ports:
-      - "6379:6379"

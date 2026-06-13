@@ -14,7 +14,14 @@ from env_toolset import session_id
 
 CS_AGENT_URL = os.environ["CS_AGENT_URL"]
 
-_TIMEOUT_S = 300.0
+# Strictly LESS than the harness's fixed 300s budgets (the bridge's per-turn
+# timeout and the gateway's CS-forward timeout are both 300s). If we waited the
+# full 300s, a slow CS turn would trip the harness bridge at the same instant
+# and surface as an A2AClientTimeoutError -> INFRASTRUCTURE_ERROR (reward 0,
+# and the task drops from the cross-team completed set). Capping below 300s
+# leaves the personal agent slack to catch the timeout and still return a
+# graceful reply to the user within the turn.
+_TIMEOUT_S = 240.0
 
 
 def _text_of_message(message: Message) -> str:
@@ -52,14 +59,25 @@ async def ask_customer_service(message: str, tool_context: ToolContext) -> str:
         parts=[Part(root=TextPart(text=message))],
         context_id=session_id(tool_context),
     )
-    async with httpx.AsyncClient(timeout=_TIMEOUT_S) as http_client:
-        client = ClientFactory(
-            ClientConfig(streaming=False, httpx_client=http_client)
-        ).create(minimal_agent_card(CS_AGENT_URL, ["JSONRPC"]))
-        reply = ""
-        async for event in client.send_message(outgoing):
-            if isinstance(event, Message):
-                reply = _text_of_message(event) or reply
-            elif isinstance(event, tuple) and isinstance(event[0], Task):
-                reply = _text_of_task(event[0]) or reply
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_S) as http_client:
+            client = ClientFactory(
+                ClientConfig(streaming=False, httpx_client=http_client)
+            ).create(minimal_agent_card(CS_AGENT_URL, ["JSONRPC"]))
+            reply = ""
+            async for event in client.send_message(outgoing):
+                if isinstance(event, Message):
+                    reply = _text_of_message(event) or reply
+                elif isinstance(event, tuple) and isinstance(event[0], Task):
+                    reply = _text_of_task(event[0]) or reply
+    except Exception as exc:
+        # Degrade gracefully: never let a timeout/disconnect propagate out of the
+        # tool. A raised exception would abort the whole personal turn and the
+        # harness scores it INFRASTRUCTURE_ERROR; returning text lets the model
+        # apologise / retry and the turn still completes normally.
+        return (
+            f"[customer service did not respond ({type(exc).__name__}). It may be "
+            "busy. Tell the user you couldn't reach customer service just now and "
+            "offer to try again, or proceed with anything you can do directly.]"
+        )
     return reply or "[no response from customer service]"
