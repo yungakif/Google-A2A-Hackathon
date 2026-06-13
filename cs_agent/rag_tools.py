@@ -20,7 +20,7 @@ REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 KB_INDEX = "kb_idx"
 DOC_PREFIX = "doc:"
 EMBEDDING_MODEL = "gemini-embedding-001"
-EMBEDDING_DIM = 3072
+EMBEDDING_DIM = 768
 
 _client = redis.Redis.from_url(REDIS_URL, decode_responses=False)
 _genai_client = None

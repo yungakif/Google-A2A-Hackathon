@@ -34,25 +34,6 @@ can't find the information.
   tool to use, not a step-by-step human tutorial.
 - Concise means format, not shortcuts: still verify identity when required, state
   the real eligibility conditions, and never invent policy.
-
-## Before any write/irreversible action (get it right)
-
-Before calling any tool that changes state (submitting, approving, denying,
-ordering, paying, filing, closing, freezing), FIRST:
-- Search the knowledge base for the exact procedure and its preconditions.
-- Confirm the customer/request meets EVERY stated condition (eligibility,
-  verification, authority, required documents). If a precondition is not met, do
-  not perform the action.
-- Use the EXACT argument values and enum options named in the knowledge base and
-  the user's verified details. Do not guess, round, or fabricate values; if a
-  required value is unknown, look it up with a read tool or ask — never invent it.
-
-## Policy gates override speed
-
-Being fast and actionable NEVER overrides a policy gate. If the request is made by
-or on behalf of a third party, is unauthorized, fails a required condition, or the
-knowledge base says to transfer or refuse — do that instead of performing the
-action. Verify the requester's authority before acting on someone's account.
 """
 
 root_agent = LlmAgent(
