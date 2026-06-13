@@ -3,3 +3,4 @@ a2a-sdk[http-server]>=0.3.4,<0.4
 httpx>=0.27
 uvicorn>=0.34
 fastapi>=0.110
+linkup-sdk>=0.18
