@@ -1,8 +1,9 @@
 """Knowledge-base search tools backed by Redis (RediSearch).
 
-kb_search_bm25: full-text BM25 search (OR-semantics keyword query).
-kb_search_vector: HNSW vector search over gemini-embedding-001 embeddings
-(available only when the index was built with embeddings).
+kb_search: one hybrid tool — runs BM25 (OR-semantics keyword) and HNSW vector
+search over gemini-embedding-001 chunk embeddings, then fuses them with
+Reciprocal Rank Fusion. Vector search is skipped gracefully if the index has no
+embeddings (BM25-only).
 
 Replies are parsed via execute_command so both the classic array reply and
 the Redis 8 map-style reply work regardless of redis-py version."""
@@ -12,6 +13,8 @@ import re
 import struct
 
 import redis
+
+from fusion import reciprocal_rank_fusion
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 KB_INDEX = "kb_idx"
@@ -77,17 +80,7 @@ def _strip_score(docs: list[dict]) -> list[dict]:
     return docs
 
 
-def kb_search_bm25(query: str, top_k: int = 5) -> list[dict]:
-    """Full-text (BM25) search over the Rho-Bank knowledge base.
-
-    Args:
-        query: Keywords or a short phrase to search for. Matching is ranked,
-            so extra keywords help rather than hurt.
-        top_k: Number of documents to return.
-
-    Returns:
-        Matching documents with doc_id, title, and full content.
-    """
+def _search_bm25(query: str, top_k: int) -> list[dict]:
     terms = re.findall(r"\w+", query.lower())
     if not terms:
         return []
@@ -96,40 +89,66 @@ def kb_search_bm25(query: str, top_k: int = 5) -> list[dict]:
     reply = _client.execute_command(
         "FT.SEARCH", KB_INDEX, or_query,
         "LIMIT", "0", str(top_k),
-        "RETURN", "2", "title", "content",
+        "RETURN", "3", "title", "section", "content",
     )
     return _parse_search_reply(reply)
 
 
-def kb_search_vector(query: str, top_k: int = 5) -> list[dict]:
-    """Semantic (vector) search over the Rho-Bank knowledge base.
+def _search_vector(query: str, top_k: int) -> list[dict]:
+    vector = struct.pack(f"{EMBEDDING_DIM}f", *_embed([query])[0])
+    reply = _client.execute_command(
+        "FT.SEARCH", KB_INDEX, f"*=>[KNN {top_k} @embedding $vec AS score]",
+        "PARAMS", "2", "vec", vector,
+        "SORTBY", "score",
+        "LIMIT", "0", str(top_k),
+        "RETURN", "4", "title", "section", "content", "score",
+        "DIALECT", "2",
+    )
+    return _strip_score(_parse_search_reply(reply))
 
-    Better than kb_search_bm25 when the query is a natural-language question
-    rather than exact keywords.
+
+def _parent_doc_id(key: str) -> str:
+    base = key[len(DOC_PREFIX):] if key.startswith(DOC_PREFIX) else key
+    return base.split("#")[0]
+
+
+def kb_search(query: str, top_k: int = 5) -> list[dict]:
+    """Search the Rho-Bank knowledge base and return the most relevant sections.
+
+    Runs keyword (BM25) and semantic (vector) search together and fuses the
+    results, so you get the best of both with one call. Use this for any policy
+    question, procedure, eligibility rule, or scenario guidance.
 
     Args:
-        query: A natural-language question or description.
-        top_k: Number of documents to return.
+        query: A natural-language question or keywords. Extra context helps.
+        top_k: Number of sections to return.
 
     Returns:
-        Matching documents with doc_id, title, and full content; or an error
-        entry telling you to fall back to kb_search_bm25.
+        Matching sections, each with doc_id, title, section (heading), and content.
     """
+    pool = max(top_k * 2, 10)
+    bm25 = _search_bm25(query, pool)
     try:
-        vector = struct.pack(f"{EMBEDDING_DIM}f", *_embed([query])[0])
-        reply = _client.execute_command(
-            "FT.SEARCH", KB_INDEX, f"*=>[KNN {top_k} @embedding $vec AS score]",
-            "PARAMS", "2", "vec", vector,
-            "SORTBY", "score",
-            "LIMIT", "0", str(top_k),
-            "RETURN", "3", "title", "content", "score",
-            "DIALECT", "2",
-        )
-        return _strip_score(_parse_search_reply(reply))
-    except Exception as e:
-        return [
-            {
-                "error": f"Vector search unavailable ({type(e).__name__}). "
-                "Use kb_search_bm25 with keywords instead."
-            }
-        ]
+        vector = _search_vector(query, pool)
+    except Exception:
+        vector = []
+
+    field_map: dict[str, dict] = {}
+    for d in bm25 + vector:
+        field_map.setdefault(d["doc_id"], d)
+
+    rankings = [[d["doc_id"] for d in bm25]]
+    if vector:
+        rankings.append([d["doc_id"] for d in vector])
+    fused = reciprocal_rank_fusion(rankings, top_k=top_k)
+
+    results = []
+    for key in fused:
+        d = field_map.get(key, {})
+        results.append({
+            "doc_id": _parent_doc_id(key),
+            "title": d.get("title", ""),
+            "section": d.get("section", ""),
+            "content": d.get("content", ""),
+        })
+    return results
