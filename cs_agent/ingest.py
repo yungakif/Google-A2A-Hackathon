@@ -17,6 +17,7 @@ from redis.commands.search.field import TextField, VectorField
 from redis.commands.search.index_definition import IndexDefinition, IndexType
 
 from rag_tools import DOC_PREFIX, EMBEDDING_DIM, KB_INDEX, REDIS_URL, _embed
+from chunking import chunk_document, embed_text
 
 KB_DOCUMENTS_DIR = Path(os.environ.get("KB_DOCUMENTS_DIR", "/app/kb/documents"))
 # Pre-baked {doc_id: base64(float32)} cache (see precompute_embeddings.py).
@@ -78,6 +79,7 @@ def build_index() -> None:
     client.ft(KB_INDEX).create_index(
         fields=[
             TextField("title", weight=2.0),
+            TextField("section", weight=1.5),
             TextField("content"),
             VectorField(
                 "embedding",
@@ -88,39 +90,41 @@ def build_index() -> None:
         definition=IndexDefinition(prefix=[DOC_PREFIX], index_type=IndexType.HASH),
     )
 
+    chunks = [c for d in documents for c in chunk_document(d)]
+
     # Pre-baked cache first; live-embed only the misses (BM25-only if neither).
     cache = load_embedding_cache()
-    embedding_bytes: list[bytes | None] = [cache.get(d["id"]) for d in documents]
+    embedding_bytes: list[bytes | None] = [cache.get(c["id"]) for c in chunks]
     misses = [i for i, b in enumerate(embedding_bytes) if b is None]
     if cache:
         print(
-            f"[ingest] embedding cache hit for {len(documents) - len(misses)}/"
-            f"{len(documents)} documents",
+            f"[ingest] embedding cache hit for {len(chunks) - len(misses)}/"
+            f"{len(chunks)} chunks",
             file=sys.stderr,
         )
     if misses:
         try:
             for start in range(0, len(misses), EMBED_BATCH_SIZE):
                 idx = misses[start : start + EMBED_BATCH_SIZE]
-                vectors = _embed([f"{documents[i]['title']}\n{documents[i]['content']}" for i in idx])
+                vectors = _embed([embed_text(chunks[i]) for i in idx])
                 for i, vector in zip(idx, vectors):
                     embedding_bytes[i] = struct.pack(f"{EMBEDDING_DIM}f", *vector)
-            print(f"[ingest] live-embedded {len(misses)} uncached documents", file=sys.stderr)
+            print(f"[ingest] live-embedded {len(misses)} uncached chunks", file=sys.stderr)
         except Exception as e:
             print(
-                f"[ingest] embeddings unavailable ({e}); {len(misses)} doc(s) "
-                "will be BM25-only (kb_search_bm25 still works)",
+                f"[ingest] embeddings unavailable ({e}); {len(misses)} chunk(s) "
+                "will be BM25-only (kb_search still works)",
                 file=sys.stderr,
             )
 
     pipe = client.pipeline(transaction=False)
-    for doc, emb in zip(documents, embedding_bytes):
-        mapping = {"title": doc["title"], "content": doc["content"]}
+    for chunk, emb in zip(chunks, embedding_bytes):
+        mapping = {"title": chunk["title"], "section": chunk["section"], "content": chunk["content"]}
         if emb is not None:
             mapping["embedding"] = emb
-        pipe.hset(f"{DOC_PREFIX}{doc['id']}", mapping=mapping)
+        pipe.hset(f"{DOC_PREFIX}{chunk['id']}", mapping=mapping)
     pipe.execute()
-    print(f"[ingest] indexed {len(documents)} documents into {KB_INDEX}", file=sys.stderr)
+    print(f"[ingest] indexed {len(chunks)} chunks from {len(documents)} documents into {KB_INDEX}", file=sys.stderr)
 
 
 if __name__ == "__main__":
