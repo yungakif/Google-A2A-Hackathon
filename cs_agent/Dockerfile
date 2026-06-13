@@ -5,6 +5,7 @@ COPY cs_agent/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY cs_agent/ .
+COPY context_store.py .
 COPY kb/ ./kb/
 
 EXPOSE 9002

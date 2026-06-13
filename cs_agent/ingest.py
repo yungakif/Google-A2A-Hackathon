@@ -26,12 +26,32 @@ EMBED_BATCH_SIZE = 25
 
 
 def load_embedding_cache() -> dict[str, bytes]:
-    """Load pre-baked embedding bytes by doc id (empty dict if no cache)."""
+    """Load pre-baked embedding bytes by doc id (empty dict if no cache).
+
+    Entries whose byte length does not match the current EMBEDDING_DIM are
+    dropped, so a stale cache (e.g. one baked at a different dimension) is
+    re-embedded live instead of being HSET into a mismatched vector field where
+    it would silently fail to index and quietly disable vector search."""
     if not KB_EMBEDDINGS_PATH.exists():
         return {}
     with open(KB_EMBEDDINGS_PATH) as fp:
         raw = json.load(fp)
-    return {doc_id: base64.b64decode(b64) for doc_id, b64 in raw.items()}
+    expected = EMBEDDING_DIM * 4  # float32 bytes per vector
+    cache: dict[str, bytes] = {}
+    stale = 0
+    for doc_id, b64 in raw.items():
+        blob = base64.b64decode(b64)
+        if len(blob) == expected:
+            cache[doc_id] = blob
+        else:
+            stale += 1
+    if stale:
+        print(
+            f"[ingest] dropped {stale} cached embedding(s) with wrong size "
+            f"(expected dim {EMBEDDING_DIM}); they will be re-embedded live",
+            file=sys.stderr,
+        )
+    return cache
 
 
 def load_documents() -> list[dict]:

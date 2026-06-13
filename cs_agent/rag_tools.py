@@ -17,19 +17,31 @@ REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 KB_INDEX = "kb_idx"
 DOC_PREFIX = "doc:"
 EMBEDDING_MODEL = "gemini-embedding-001"
-EMBEDDING_DIM = 768
+EMBEDDING_DIM = 3072
 
 _client = redis.Redis.from_url(REDIS_URL, decode_responses=False)
 _genai_client = None
 
 
 def _get_genai_client():
-    """Reused genai client (one connection pool, not a new one per search)."""
+    """Reused genai client (one connection pool, not a new one per search).
+
+    Configured to retry Vertex rate-limit / transient errors with exponential
+    backoff so embedding calls survive higher eval concurrency on one API key
+    instead of failing the search outright."""
     global _genai_client
     if _genai_client is None:
         from google import genai
+        from google.genai import types
 
-        _genai_client = genai.Client()
+        _genai_client = genai.Client(
+            http_options=types.HttpOptions(
+                retry_options=types.HttpRetryOptions(
+                    attempts=4, initial_delay=1.0, max_delay=20.0, exp_base=2.0,
+                    jitter=0.5, http_status_codes=[429, 500, 503],
+                )
+            )
+        )
     return _genai_client
 
 
@@ -133,3 +145,59 @@ def kb_search_vector(query: str, top_k: int = 5) -> list[dict]:
                 "Use kb_search_bm25 with keywords instead."
             }
         ]
+
+
+def _rrf_fuse(rankings: list[list[str]], k: int = 60) -> dict[str, float]:
+    """Reciprocal Rank Fusion: merge several ranked id-lists into one score map.
+
+    RRF is scale-free, so it combines BM25 and cosine rankings without needing
+    their (incomparable) raw scores. Lower rank => higher contribution.
+    """
+    scores: dict[str, float] = {}
+    for ranking in rankings:
+        for rank, doc_id in enumerate(ranking):
+            scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + rank + 1)
+    return scores
+
+
+def kb_search(query: str, top_k: int = 8) -> list[dict]:
+    """Hybrid search over the Rho-Bank knowledge base. PREFER THIS tool.
+
+    Runs keyword (BM25) and semantic (vector) search together and fuses them
+    with Reciprocal Rank Fusion, so it is robust whether the query is exact
+    keywords (e.g. an internal tool name) or a natural-language question. Each
+    method catches what the other misses; fusion surfaces docs ranked well by
+    either. Degrades to keyword-only if embeddings are unavailable.
+
+    Args:
+        query: Keywords or a natural-language question/description.
+        top_k: Number of documents to return.
+
+    Returns:
+        Best-matching documents (doc_id, title, full content), best first.
+    """
+    over = max(top_k * 2, 10)
+    bm = kb_search_bm25(query, top_k=over)
+    vec = kb_search_vector(query, top_k=over)
+    if vec and isinstance(vec[0], dict) and "error" in vec[0]:
+        vec = []  # embeddings unavailable -> BM25 ranking only
+
+    docs: dict[str, dict] = {}
+    bm_ids: list[str] = []
+    vec_ids: list[str] = []
+    for d in bm:
+        did = d.get("doc_id")
+        if did:
+            docs.setdefault(did, d)
+            bm_ids.append(did)
+    for d in vec:
+        did = d.get("doc_id")
+        if did:
+            docs.setdefault(did, d)
+            vec_ids.append(did)
+
+    if not docs:
+        return []
+    fused = _rrf_fuse([bm_ids, vec_ids])
+    ranked = sorted(fused, key=lambda did: -fused[did])[:top_k]
+    return [docs[did] for did in ranked]
