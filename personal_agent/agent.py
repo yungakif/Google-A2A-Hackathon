@@ -6,7 +6,6 @@ from google.adk.agents import LlmAgent
 from google.adk.models.google_llm import Gemini
 from google.genai import types
 
-from context_store import inject_context, remember_context
 from cs_client_tool import ask_customer_service
 from env_toolset import EnvApiToolset
 from tool_guard import dedupe_after_tool, dedupe_before_tool
@@ -46,11 +45,6 @@ You are the user's personal banking assistant for their Rho-Bank accounts.
   required detail, ask the user first.
 - Make ONLY the tool calls the task requires — no exploratory or duplicate
   calls. Each banking action tool changes real state; don't call one twice.
-- A shared session context may appear in your prompt with facts already
-  gathered this conversation; reuse it instead of re-asking, but verify before
-  acting and work normally if it is empty. Save durable user-provided facts
-  (e.g. the verification details the user gave you) with remember_context so
-  customer service can reuse them.
 - Be concise and accurate; never invent account details or policies. If a
   customer-service reply is empty or unclear, ask once for clarification, then
   proceed with what you have. When the request is resolved, give the user ONE
@@ -61,8 +55,7 @@ root_agent = LlmAgent(
     name="personal_agent",
     model=Gemini(model=MODEL, retry_options=_RETRY),
     instruction=INSTRUCTION,
-    tools=[EnvApiToolset(), ask_customer_service, remember_context],
-    before_model_callback=inject_context,
+    tools=[EnvApiToolset(), ask_customer_service],
     before_tool_callback=dedupe_before_tool,
     after_tool_callback=dedupe_after_tool,
 )

@@ -3,6 +3,7 @@ __pycache__/
 
 # Local-only ADC auth wiring (marking uses GOOGLE_API_KEY, not ADC)
 docker-compose.override.yml
+docker-compose.eval.override.yml
 
 # Generated embedding cache (regenerate with cs_agent/precompute_embeddings.py)
 kb/embeddings.json

@@ -7,10 +7,8 @@ from google.adk.agents import LlmAgent
 from google.adk.models.google_llm import Gemini
 from google.genai import types
 
-from context_store import inject_context, remember_context
 from env_toolset import EnvApiToolset
 from rag_tools import kb_search, kb_search_bm25, kb_search_vector
-from research_client_tool import ask_research_agent
 from sequencer import unlock_and_call
 from tool_guard import dedupe_after_tool, dedupe_before_tool
 
@@ -57,31 +55,11 @@ the tool called several times (e.g. once per account or card), call
 you finish.
 """
 
-RESEARCH_GUIDANCE = """
-
-## Research agent + shared session context
-
-For information OUTSIDE the bank knowledge base (general/public facts), delegate
-to `ask_research_agent(message)`; it researches and writes what it finds into
-this session's shared context. For bank policy and procedures, use the knowledge
-base directly (kb_search) — do not route policy questions to research. If the
-research agent is unavailable, answer from the knowledge base instead; never
-stall waiting on it.
-
-A shared session context (shown above, refreshed each turn) carries facts the
-agents in this conversation have already gathered. Treat it as a cache: reuse it
-to avoid re-deriving work, but verify anything you act on, and work normally if
-it is empty. When you establish something durable and reusable — the user's
-verified identity, their record fields, the resolved procedure, or an exact
-discoverable tool name and its arguments — save it with
-`remember_context(key, value)` so the rest of the chain benefits.
-"""
-
 root_agent = LlmAgent(
     name="cs_agent",
     model=Gemini(model=MODEL, retry_options=_RETRY),
     instruction=(
-        POLICY_PATH.read_text() + RAG_GUIDANCE + SEQUENCER_GUIDANCE + RESEARCH_GUIDANCE
+        POLICY_PATH.read_text() + RAG_GUIDANCE + SEQUENCER_GUIDANCE
     ),
     tools=[
         EnvApiToolset(),
@@ -89,10 +67,7 @@ root_agent = LlmAgent(
         kb_search_bm25,
         kb_search_vector,
         unlock_and_call,
-        ask_research_agent,
-        remember_context,
     ],
-    before_model_callback=inject_context,
     before_tool_callback=dedupe_before_tool,
     after_tool_callback=dedupe_after_tool,
 )

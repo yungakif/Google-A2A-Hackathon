@@ -1,7 +1,5 @@
 # Isolated eval stack on ALT ports (9011/9012) so it never collides with a
-# teammate's stack on 9001/9002/9003. redis is not published to the host.
-# Excludes research-agent (banking tasks don't need it); RESEARCH_AGENT_URL is
-# set empty so research_client_tool imports without a KeyError.
+# teammate's stack on 9001/9002. redis is not published to the host.
 services:
   personal-agent:
     build:
@@ -37,7 +35,6 @@ services:
       MODEL: ${MODEL:-gemini-3.5-flash}
       GOOGLE_GENAI_USE_VERTEXAI: ${GOOGLE_GENAI_USE_VERTEXAI:-true}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
-      RESEARCH_AGENT_URL: ${RESEARCH_AGENT_URL:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
