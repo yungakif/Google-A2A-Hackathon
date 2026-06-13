@@ -5,6 +5,8 @@ import os
 from google.adk.agents import LlmAgent
 from linkup import LinkupClient
 
+from shared_memory import inject_shared_memory
+
 MODEL = os.environ.get("MODEL", "gemini-3.5-flash")
 
 # Linkup search configuration. depth: "fast" | "standard" | "deep".
@@ -14,7 +16,9 @@ LINKUP_TIMEOUT_S = float(os.environ.get("LINKUP_TIMEOUT_S", "60"))
 INSTRUCTION = (
     "You are the Research Agent. Your job is to conduct deep internet research "
     "using the web_search tool when the Customer Service agent asks you a "
-    "question. Base your reply on the search results and cite the source URLs."
+    "question. Base your reply on the search results and cite the source URLs. "
+    "Use the shared memory context to perform highly targeted Linkup web "
+    "searches without needing the CS agent to explain everything."
 )
 
 
@@ -61,4 +65,5 @@ root_agent = LlmAgent(
     model=MODEL,
     instruction=INSTRUCTION,
     tools=[web_search],
+    before_model_callback=inject_shared_memory,
 )

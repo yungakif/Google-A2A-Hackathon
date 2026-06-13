@@ -8,6 +8,7 @@ from google.adk.agents import LlmAgent
 from env_toolset import EnvApiToolset
 from rag_tools import kb_search_bm25, kb_search_vector
 from research_client_tool import ask_research_agent
+from shared_memory import inject_shared_memory, update_shared_memory
 
 MODEL = os.environ.get("MODEL", "gemini-3.5-flash")
 POLICY_PATH = Path(os.environ.get("KB_POLICY_PATH", "/app/kb/policy.md"))
@@ -38,9 +39,30 @@ relay its findings. Prefer the knowledge base for bank policy; use the
 research agent for general internet research.
 """
 
+MEMORY_GUIDANCE = """
+
+## Shared Memory
+
+Before taking action, check the current shared memory state to understand the
+user's context — it is shown to you under "Shared Memory (session context)".
+When you learn a durable fact about the user (e.g. their name, intent, or
+verified details), store it with update_shared_memory so the other agents can
+see it too.
+"""
+
 root_agent = LlmAgent(
     name="cs_agent",
     model=MODEL,
-    instruction=POLICY_PATH.read_text() + RAG_GUIDANCE + RESEARCH_GUIDANCE,
-    tools=[EnvApiToolset(), kb_search_bm25, kb_search_vector, ask_research_agent],
+    instruction=POLICY_PATH.read_text()
+    + RAG_GUIDANCE
+    + RESEARCH_GUIDANCE
+    + MEMORY_GUIDANCE,
+    tools=[
+        EnvApiToolset(),
+        kb_search_bm25,
+        kb_search_vector,
+        ask_research_agent,
+        update_shared_memory,
+    ],
+    before_model_callback=inject_shared_memory,
 )
