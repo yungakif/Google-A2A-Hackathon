@@ -27,9 +27,25 @@ services:
       ENV_API_URL: ${ENV_API_URL:-http://host.docker.internal:8090}
       ENV_API_TOKEN: ${CS_ENV_API_TOKEN:-dev-agent-token}
       REDIS_URL: redis://redis:6379/0
+      RESEARCH_AGENT_URL: ${RESEARCH_AGENT_URL:-http://research-agent:9003}
       MODEL: ${MODEL:-gemini-3.5-flash}
       GOOGLE_GENAI_USE_VERTEXAI: ${GOOGLE_GENAI_USE_VERTEXAI:-true}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  research-agent:
+    build:
+      context: .
+      dockerfile: research_agent/Dockerfile
+    ports:
+      - "9003:9003"
+    environment:
+      MODEL: ${MODEL:-gemini-3.5-flash}
+      GOOGLE_GENAI_USE_VERTEXAI: ${GOOGLE_GENAI_USE_VERTEXAI:-true}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      LINKUP_API_KEY: ${LINKUP_API_KEY:-}
+      LINKUP_DEPTH: ${LINKUP_DEPTH:-standard}
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
