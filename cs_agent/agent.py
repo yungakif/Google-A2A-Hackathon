@@ -34,13 +34,6 @@ can't find the information.
   tool to use, not a step-by-step human tutorial.
 - Concise means format, not shortcuts: still verify identity when required, state
   the real eligibility conditions, and never invent policy.
-
-## Getting write actions right
-
-When you call a tool that changes state (submitting, approving, ordering, paying,
-filing), use the EXACT argument values and enum options named in the knowledge
-base and the user's verified details — don't guess, round, or fabricate them. If
-the knowledge base lists specific requirements for that action, follow them.
 """
 
 root_agent = LlmAgent(
