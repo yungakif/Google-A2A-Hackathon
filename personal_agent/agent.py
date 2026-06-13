@@ -36,6 +36,10 @@ ALWAYS.
 - Tool arguments must be real values from the user or customer service. Never use
   placeholders (e.g. customer_name="User"); if you don't know a required detail,
   ask the user first.
+- Acting fast must not skip a needed step: only perform actions your user is
+  authorized to take on their own account. If a request involves someone else's
+  account, or authority/eligibility you can't confirm, check with customer service
+  before acting rather than performing the action yourself.
 - Be concise and accurate; never invent account details or policies.
 """
 
